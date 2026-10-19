@@ -492,9 +492,21 @@ footer{position:relative;z-index:10;text-align:center;padding:70px 0 56px}
 /* 舞台:16/9 是视频的天然比例,图片用 contain 兜住竖图和方图 */
 .pb-stage{width:100%;aspect-ratio:16/9;border-radius:18px;overflow:hidden;
   background:#0b0a0d;border:1px solid var(--line-2);
-  display:grid;place-items:center}
+  position:relative;display:grid;place-items:center}
 .pb-stage video{width:100%;height:100%;object-fit:contain;display:block}
 .pb-stage img{max-width:100%;max-height:100%;object-fit:contain;display:block}
+/* 缓冲提示。绝对定位压在视频上,不占布局 —— 出现/消失不会推动下方文字跳动。 */
+.pb-tip{position:absolute;inset:0;z-index:5;display:grid;place-content:center;
+  justify-items:center;gap:13px;padding:20px;text-align:center;
+  background:rgba(11,10,13,.62);backdrop-filter:blur(3px);
+  font-family:var(--sans);font-size:12.5px;line-height:1.85;color:var(--muted);
+  letter-spacing:.03em}
+.pb-spin{width:26px;height:26px;border-radius:50%;
+  border:2px solid rgba(255,255,255,.16);border-top-color:var(--pink);
+  animation:pbSpin .8s linear infinite}
+@keyframes pbSpin{to{transform:rotate(360deg)}}
+.pb-tip--err{background:rgba(11,10,13,.86)}
+.pb-tip--err .pb-tip-tx{color:var(--fg)}
 .pb-meta{margin-top:14px}
 .pb-meta h4{font-family:var(--zh);font-weight:500;font-size:19px;letter-spacing:.3px}
 .pb-meta p{font-family:var(--sans);font-size:12px;color:var(--muted);margin-top:5px;
@@ -838,9 +850,16 @@ footer{position:relative;z-index:10;text-align:center;padding:70px 0 56px}
       cur = it.kind==='video' ? document.createElement('video')
                                : document.createElement('img');
       if(it.kind==='video'){
-        cur.src=it.src; cur.poster=it.src.replace(/\.mp4$/,'.webp');
-        cur.controls=true; cur.playsInline=true; cur.preload='metadata';
+        /* preload='auto' + 显式 poster:不写 poster 的话浏览器要等第一帧解码完
+           才显示画面,网络稍慢就是一片黑 —— 用户会以为视频坏了。
+           poster 用同名 webp(几十 KB),首屏立刻有画面。 */
+        cur.poster=it.src.replace(/\.mp4$/,'.webp');
+        cur.controls=true; cur.playsInline=true; cur.preload='auto';
+        cur.setAttribute('playsinline',''); cur.setAttribute('webkit-playsinline','');
+        cur.muted=true;   // 素材本来就无音轨,先静音保证自动播放不被浏览器拦
         cur.autoplay=true;
+        cur.src=it.src;
+        bindVideo(cur, it);
       } else {
         cur.src=it.src; cur.alt=it.name||'';
       }
@@ -850,6 +869,41 @@ footer{position:relative;z-index:10;text-align:center;padding:70px 0 56px}
     idx.textContent=(at+1)+' / '+list.length;
     [...strip.children].forEach((c,j)=>c.setAttribute('aria-current', String(j===at)));
     close.focus();
+  }
+
+  /* 加载状态提示。
+     之前裸着一个黑框等网络,用户完全不知道是在加载还是坏了 —— 这是"打不开"
+     的主观来源。给出百分比 + 失败兜底,至少让人知道发生了什么。 */
+  function bindVideo(v, it){
+    const tip=document.createElement('div');
+    tip.className='pb-tip';
+    tip.innerHTML='<span class="pb-spin"></span><span class="pb-tip-tx">缓冲中</span>';
+    stage.appendChild(tip);
+
+    const kill=()=>{ if(tip.parentNode) tip.remove(); };
+    const onMeta=()=>{
+      // 拿到时长就能算出每段耗时,给一个具体数字比"缓冲中"有信息量
+      const d=v.duration||0, k=Math.max(1,v.buffered.length?v.buffered.end(v.buffered.length-1):0);
+      tip.querySelector('.pb-tip-tx').textContent =
+        d? '缓冲 '+(k/d*100).toFixed(0)+'%' : '缓冲中';
+    };
+    v.addEventListener('progress', onMeta);
+    v.addEventListener('loadedmetadata', onMeta);
+    v.addEventListener('canplay', kill);
+    v.addEventListener('playing', kill);
+    v.addEventListener('error', ()=>{
+      tip.classList.add('pb-tip--err');
+      tip.innerHTML='<span class="pb-tip-tx">这条素材加载失败,可能是网络太慢。<br>'+
+                    '可以先看缩略图,或者稍后重试。</span>';
+    });
+    // 卡住不动也要给个说法:8 秒还没起播就提示
+    const guard=setTimeout(()=>{
+      if(!v.paused === false && v.readyState<3 && !tip.classList.contains('pb-tip--err')){
+        tip.querySelector('.pb-tip-tx').textContent='网络较慢,仍在缓冲…';
+      }
+    }, 8000);
+    ['canplay','playing','error'].forEach(ev=>
+      v.addEventListener(ev, ()=>clearTimeout(guard), {once:true}));
   }
   function open(items,i){
     list=items; lastFocus=document.activeElement;
