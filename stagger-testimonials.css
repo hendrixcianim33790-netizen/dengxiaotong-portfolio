@@ -1,0 +1,325 @@
+/* ============================================================
+   Stagger Testimonials — 错落卡片阵
+   ------------------------------------------------------------
+   原React 版:一排卡片绝对定位在中心,按 position 沿 X 轴等距排开、
+   上下错落并轻微旋转,居中那张反色 + 硬投影。点任意一张转到中心。
+
+   本次修订(用户反馈「好丑,统一调一下位置大小」):
+     · 卡片从正方形改为 400×300 横向比例 —— 经历条目是长段落,
+       正方形卡必然在底部裁掉关键数字
+     · 头像与机构名并排,省下一整行 58px 的垂直空间
+     · 正文限 3 行(line-clamp),溢出部分不再压到 stats 上
+     · 所有卡片严格同尺寸:错落只靠 dy/透明度/模糊表达,
+       旋转压到 ±1°(2.2° 时 getBoundingClientRect 外接矩形会涨 15px,
+       视觉上就是"大小不统一")
+     · 隐藏半径收窄到 ±1 张,避免边缘出现半张残卡
+   ============================================================ */
+
+.stg {
+  --cw: 340;/* 卡片宽 */
+  --ch: 286;/* 卡片高 */
+  --step: 1.42;/* 间距除数:越小重叠越多 */
+  --ease: cubic-bezier(.22, .8, .2, 1);
+  position: relative;
+  width: 100%;
+  height: 440px;
+  overflow: hidden;
+  border-radius: 26px;
+  /* 这一层刻意透明:霓虹纹理由 .sec 提供,再叠一层会出现矩形色块 */
+  background: transparent;
+  border: 1px solid var(--line-2);
+  /* 横向淡出:边缘要足够柔,否则会在板块底上留下一条可见的矩形边界。
+     淡出区不能太宽 —— 只显示 ±1 张时有效内容本来就不满容器,
+     再各吃掉 14% 就会出现"内容全挤在右边"的空档。 */
+  -webkit-mask: linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%);
+          mask: linear-gradient(90deg, transparent 0%, #000 6%, #000 94%, transparent 100%);
+}
+.stg-track { position: absolute; inset: 0; transform-style: preserve-3d; }
+
+/* ---- 单张卡 ---- */
+.stg-card {
+  position: absolute;
+  left: 50%;
+  top: 46%;
+  width: calc(var(--cw) * 1px);
+  height: calc(var(--ch) * 1px);
+  /* 四角削斜,这是原版最有辨识度的一笔 */
+  clip-path: polygon(34px 0%, calc(100% - 34px) 0%, 100% 34px, 100% 100%,
+    calc(100% - 34px) 100%, 34px 100%, 0 100%, 0 0);
+  cursor: pointer;
+  border: 1.5px solid var(--line);
+  /* 不透明底:相邻卡片有重叠,半透明会让两侧文字互相透出来 */
+  background: hsl(var(--background) / .985);
+  color: var(--fg);
+  padding: 24px 26px 22px;
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  font: inherit;
+  overflow: hidden;
+  transform:
+    translate(-50%, -50%)
+    translateX(calc(var(--pos) * var(--cw) / var(--step) * 1px))
+    translateY(calc(var(--dy) * 1px))
+    rotate(calc(var(--rot) * 1deg));
+  transition:
+    transform .55s var(--ease),
+    box-shadow .55s var(--ease),
+    border-color .55s var(--ease),
+    background .55s var(--ease),
+    opacity .55s var(--ease);
+  /* 两侧卡越远越淡,让中心卡的文字绝对清晰。
+     下限 .78 不能再低:再暗就读不出"那里还有一张卡",
+     观众只会以为左右两边是背景上的脏斑。 */
+  opacity: calc(1 - min(var(--abs) * .22, .78));
+  will-change: transform;
+}
+
+/* 非居中的卡:模糊 + 降饱和。
+   卡片本身有横向重叠,任何清晰度都意味着两段文字叠在一起。
+   用滤镜把侧卡明确推到背景层,层级关系就清楚了 —— 这不是修饰,是可读性前提。 */
+.stg-card:not([data-center]) {
+  filter: blur(1.4px) saturate(.62) brightness(.92);
+}
+.stg-card:not([data-center]):hover {
+  filter: blur(.4px) saturate(.9) brightness(1);
+}
+
+/* 居中那张:反色 + 硬投影,视觉重量明显高于两侧。
+   尺寸与侧卡完全一致 —— 差异只来自颜色与投影,不来自大小。 */
+.stg-card[data-center] {
+  filter: none;
+  z-index: 10;
+  background: hsl(var(--foreground) / .96);
+  color: hsl(var(--background));
+  border-color: hsl(var(--foreground) / .96);
+  box-shadow: 6px 8px 0 3px hsl(var(--foreground) / .22);
+}
+.stg-card:not([data-center]):hover {
+  border-color: hsl(var(--primary) / .5);
+  z-index: 5;
+}
+.stg-card[data-center]:hover {
+  transform:
+    translate(-50%, -50%)
+    translateX(calc(var(--pos) * var(--cw) / var(--step) * 1px))
+    translateY(calc(var(--dy) * 1px - 5px))
+    rotate(0deg);
+}
+
+/* 右上角的斜切装饰线:原版用一根旋转 45° 的方块 */
+.stg-notch {
+  position: absolute;
+  right: -2px;
+  top: 36px;
+  width: 62px;
+  height: 1.5px;
+  background: hsl(var(--foreground) / .3);
+  transform-origin: top right;
+  transform: rotate(45deg);
+}
+.stg-card[data-center] .stg-notch { background: hsl(var(--background) / .45); }
+
+/* ---- 头部:头像 + 机构名并排,替代原来的四行竖排 ---- */
+.stg-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: none;
+  margin-bottom: 16px;
+}
+
+/* 头像:纯 CSS 色块 + 首字母,不依赖外部图片 */
+.stg-av {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 22px;
+  letter-spacing: -.02em;
+  color: hsl(var(--av-h) 26% 88%);
+  background: linear-gradient(165deg,
+    hsl(var(--av-h) 22% 34%) 0%,
+    hsl(var(--av-h) 20% 20%) 100%);
+  box-shadow: 3px 3px 0 hsl(var(--background) / .9);
+  border-radius: 2px;
+}
+.stg-card[data-center] .stg-av {
+  color: hsl(var(--av-h) 34% 22%);
+  background: linear-gradient(165deg,
+    hsl(var(--av-h) 30% 76%) 0%,
+    hsl(var(--av-h) 26% 58%) 100%);
+  box-shadow: 3px 3px 0 hsl(var(--background) / .55);
+}
+
+.stg-id { min-width: 0; display: block; }
+.stg-when {
+  display: block;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  letter-spacing: .1em;
+  opacity: .72;
+  margin-bottom: 4px;
+}
+.stg-org {
+  display: block;
+  font-family: var(--serif);
+  font-size: 19px;
+  line-height: 1.28;
+  font-weight: 600;
+  letter-spacing: -.015em;
+}
+
+.stg-role {
+  flex: none;
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  opacity: .66;
+  margin-bottom: 13px;
+  padding-bottom: 11px;
+  border-bottom: 1px solid currentColor;
+}
+.stg-card[data-center] .stg-role { border-bottom-color: hsl(var(--background) / .25); }
+
+/* 正文:限 3 行。
+   注意不能用 flex:1 —— flex 会把盒子撑到剩余空间(实测 clientH 97px =
+   4.4 行),line-clamp 于是被架空,第 4 行露出半行被裁成一道横线。
+   改成固定 3 行高 + 底部渐隐:硬裁会在正文中间留下一道横线,
+   渐隐则读起来就是"还有更多",这才是长段落该有的收尾。 */
+.stg-body {
+  flex: none;
+  height: 5.34em;/* 3 行 × line-height 1.78 */
+  font-size: 12.5px;
+  line-height: 1.78;
+  opacity: .84;
+  overflow: hidden;
+  -webkit-mask: linear-gradient(#000 62%, transparent 100%);
+          mask: linear-gradient(#000 62%, transparent 100%);
+}
+/* 数字高亮:经历里的关键指标不能埋在段落里 */
+.stg-body b {
+  font-weight: 500;
+  color: var(--pink);
+  white-space: nowrap;
+}
+.stg-card[data-center] .stg-body b { color: hsl(var(--background) / .95); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1.5px; }
+
+.stg-stats {
+  flex: none;
+  display: flex;
+  gap: 22px;
+  margin-top: 14px;
+  padding-top: 14px;
+}
+.stg-stat { flex: none; min-width: 0; }
+.stg-stat b {
+  display: block;
+  font-family: var(--serif);
+  font-size: 20px;
+  line-height: 1.05;
+  font-weight: 600;
+  letter-spacing: -.02em;
+  color: currentColor;
+}
+.stg-stat span {
+  display: block;
+  margin-top: 4px;
+  font-size: 9.5px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  opacity: .6;
+  white-space: nowrap;
+}
+
+/* ---- 底部轮转 ---- */
+.stg-nav {
+  position: absolute;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  z-index: 30;
+}
+.stg-btn {
+  all: unset;
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  background: hsl(var(--background) / .8);
+  border: 1.5px solid var(--line);
+  color: var(--fg);
+  transition: background .3s var(--ease), color .3s var(--ease), border-color .3s var(--ease), transform .3s var(--ease);
+}
+.stg-btn:hover {
+  background: hsl(var(--foreground) / .95);
+  color: hsl(var(--background));
+  border-color: hsl(var(--foreground) / .95);
+  transform: translateY(-2px);
+}
+.stg-btn:active { transform: translateY(0); }
+.stg-btn:focus-visible { outline: 2px solid var(--pink); outline-offset: 3px; }
+.stg-btn svg { width: 20px; height: 20px; stroke: currentColor; stroke-width: 1.6; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+
+/* 进度点:与导航按钮分行居中。横向排布会紧贴按钮、读成一串乱码。 */
+.stg-dots {
+  position: absolute;
+  left: 50%;
+  bottom: 9px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 5px;
+  z-index: 29;
+}
+.stg-dot {
+  width: 16px;
+  height: 2px;
+  background: hsl(var(--foreground) / .22);
+  transition: background .4s var(--ease), width .4s var(--ease);
+}
+.stg-dot[data-on] { background: hsl(var(--foreground) / .8); width: 26px; }
+
+/* 桌面:卡片放大一点,给正文更多行 */
+@media (min-width: 640px) { .stg { --cw: 396; --ch: 300; height: 452px; } }
+@media (min-width: 1100px) { .stg { --cw: 424; --ch: 312; height: 462px; } }
+.stg-nav { bottom: 34px; }
+
+/* 窄屏:错落幅度收窄,否则两侧卡会被切掉太多 */
+@media (max-width: 640px) {
+  /* 窄屏卡高必须贴合实际内容高度:头 45 + role 28 + stats 46 + padding 30 ≈ 149。
+     沿用桌面的比例会空出一大片 —— 那才是"看起来很空"的真正来源。 */
+  .stg { --cw: 286; --ch: 152; height: 292px; border-radius: 20px; --step: 1.3; }
+  .stg-card { padding: 15px 18px 13px; clip-path: polygon(24px 0%, calc(100% - 24px) 0%, 100% 24px, 100% 100%, calc(100% - 24px) 100%, 24px 100%, 0 100%, 0 0); }
+  .stg-head { gap: 11px; margin-bottom: 10px; }
+  .stg-av { width: 34px; height: 34px; font-size: 17px; }
+  .stg-org { font-size: 16px; }
+  .stg-when { font-size: 9.5px; margin-bottom: 3px; }
+  .stg-role { font-size: 9.5px; margin-bottom: 0; padding-bottom: 9px; }
+  /* 窄屏:286px 宽放不下 100+ 字正文,收起正文 ——
+     机构、角色、时间、关键数字仍然完整,细节留给平板与桌面。 */
+  .stg-body { display: none; }
+  /* role 的 border-bottom 已经充当分隔线,stats 不再叠 padding-top,
+     否则分隔线和数字之间会空一段。 */
+  .stg-stats { margin-top: 11px; padding-top: 0; gap: 16px; }
+  /* 侧卡只露出一条边。压得太暗就读成一块脏斑而不是一张卡,
+     提亮一档让"还有更多"这个信息成立。 */
+  .stg-card:not([data-center]) { filter: blur(1px) saturate(.65) brightness(.95); }
+  .stg-stat b { font-size: 16px; }
+  .stg-btn { width: 40px; height: 40px; }
+  .stg-nav { bottom: 26px; }
+  .stg-dots { bottom: 7px; }
+  .stg-dot { width: 12px; }
+  .stg-dot[data-on] { width: 20px; }
+  .stg-notch { width: 40px; top: 24px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stg-card, .stg-btn, .stg-dot { transition-duration: 0s !important; }
+}

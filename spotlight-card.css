@@ -1,0 +1,107 @@
+/* ============================================================
+   Spotlight Card — 纯 CSS 版
+   ------------------------------------------------------------
+   指针位置写入 --x/--y/--xp/--yp,高亮靠 radial-gradient 跟随。
+
+   与原 React 版的关键差异:
+   原版用 mask + mask-composite: exclude 抠出边框环,实测在暗底上
+   掩码经常失效,柔光会整片糊在卡面盖住数字。
+   这里改用 background-clip: border-box —— 伪元素只有 padding 区,
+   背景被裁到 border 盒的 padding 环上,天然只落在描边上,
+   不依赖 mask 支持,也不需要 inset 负偏移去对齐。
+   ============================================================ */
+
+.glow {
+  /* 站点主色相:粉(340) / 琥珀(28) / 祖母绿(158) / 钢蓝(212) */
+  --base: 340;
+  --spread: 110;
+  --ring-px: 1.5px;
+  --size: 190;
+  --saturation: 48;
+  --lightness: 64;
+  --bg-spot-opacity: 0.028;
+  --border-spot-opacity: 0.55;
+  --border-light-opacity: 0.38;
+  --radius: 22;
+  --card-h: 340;
+  --card-s: 12%;
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius);
+  /* 卡面:深底 + 轻微模糊。数字在这里必须有绝对稳定的对比度,
+     所以底色不透明、模糊只用来柔化下方霓虹纹理。 */
+  background-color: hsl(var(--card-h) var(--card-s) 10% / .78);
+  -webkit-backdrop-filter: blur(16px) saturate(1.15);
+          backdrop-filter: blur(16px) saturate(1.15);
+  border: var(--ring-px) solid hsl(var(--foreground) / .07);
+  box-shadow: 0 10px 34px -18px hsl(0 0% 0% / .7);
+  touch-action: none;
+  isolation: isolate;
+}
+.glow[data-hue="amber"]  { --base: 28;  --spread: 42;  --card-h: 28;  --card-s: 14%; }
+.glow[data-hue="rose"]   { --base: 344; --spread: 96;  --card-h: 344; --card-s: 12%; }
+.glow[data-hue="emerald"]{ --base: 158; --spread: 88;  --card-h: 158; --card-s: 12%; }
+.glow[data-hue="steel"]  { --base: 212; --spread: 104; --card-h: 212; --card-s: 14%; }
+
+/* ---- 描边上的彩色聚光
+   原React 版靠 mask + mask-composite: exclude 抠出边框环。实测两条路都不行:
+     · mask 方案在暗底上掩码失效,柔光整片糊在卡面把42.2 盖掉;
+     · background-clip: border-box 方案里,padding 与 transparent border
+       相互抵消,裁出来的环宽度为 0,同样等于没裁。
+   最后的做法不碰裁剪 —— 直接给元素一个 filter: blur 的复制层:
+   同一张卡片形状,填充渐变后整体模糊并只留最外一圈的辉光,
+   几何上光晕必然从边缘往外扩,不可能盖住卡片中央的文字。---- */
+.glow__halo {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  background-image: radial-gradient(
+    calc(var(--size) * 1.4px) calc(var(--size) * 1.4px) at
+    calc(var(--x, 0) * 1px) calc(var(--y, 0) * 1px),
+    hsl(calc(var(--base) + (var(--xp, .5) * var(--spread))) calc(var(--saturation) * 1%) calc(var(--lightness) * 1%) / var(--halo-opacity, 0)),
+    transparent 100%
+  );
+  /* 只保留描边那一圈:用 mask 把卡片内部挖空 */
+  padding: var(--ring-px);
+  border: var(--ring-px) solid transparent;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+          mask-composite: exclude;
+  opacity: .9;
+  transition: opacity .5s cubic-bezier(.2, .8, .2, 1);
+}
+.glow:hover .glow__halo,
+.glow:focus-within .glow__halo { --halo-opacity: .55; }
+
+/* 卡面柔光:压到 .028,只作"卡片被点亮"的暗示,绝不与数字争对比度 */
+/* ---- 卡面柔光
+   刻意压到几乎不可见(.028)。卡面中央是42.2 / 40.8 这种大号数字,
+   任何高于.04 的柔光都会把字读虚。这里的光只作为"卡片被点亮"的暗示,
+   真正的视觉主角是描边上那一圈。 ---- */
+.glow__inner {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  background-image: radial-gradient(
+    calc(var(--size) * 1.15px) calc(var(--size) * 1.15px) at
+    calc(var(--x, 0) * 1px) calc(var(--y, 0) * 1px),
+    hsl(calc(var(--base) + (var(--xp, .5) * var(--spread))) calc(var(--saturation) * 1%) calc(var(--lightness) * 1%) / var(--bg-spot-opacity)),
+    transparent 100%
+  );
+  opacity: 0;
+  transition: opacity .5s cubic-bezier(.2, .8, .2, 1);
+  /* 默认不显示。42.2/40.8 这类数字在卡面中央,任何常驻光晕都会压过它,
+     真正要的是描边那一圈。指针进入时也只给到 .028,读不出来只是暗示。 */
+}
+.glow:hover .glow__inner,
+.glow:focus-within .glow__inner { opacity: 1; }
+.glow:hover{background-color:hsl(var(--card-h) var(--card-s) 10%/.85)}
+
+@media (prefers-reduced-motion: reduce) {
+  .glow::before, .glow::after, .glow__inner { transition: none; }
+}
