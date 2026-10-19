@@ -911,40 +911,48 @@ footer{position:relative;z-index:10;text-align:center;padding:70px 0 56px}
 
   /* 分段预加载:只抓文件头部就交给 <video>,让它先播起来。
      —— mp4 的 moov(索引表)已经在文件头,拿到它浏览器就知道时长和关键帧位置,
-        不需要等整个文件到位。前 1.6MB 大约覆盖 8~10 秒画面,足够撑过缓冲。 */
+        不需要等整个文件到位。前 800KB 大约覆盖 4~5 秒画面,足够撑过起播。
+
+     关键教训:fetch 之前 <video> 是没有 src 的,如果这一步卡住,用户的体验就是
+     "点了没反应"。所以必须设一个硬超时 —— 3 秒内拿不到头就立刻放弃分段、
+     退回直连 src。宁可慢一点,也不能什么都不播。 */
   const HEAD_BYTES = 800 * 1024;
+  const HEAD_TIMEOUT = 3000;
   function loadFirst(v, it){
     const tip=document.createElement('div');
     tip.className='pb-tip';
     tip.innerHTML='<span class="pb-spin"></span><span class="pb-tip-tx">加载中</span>';
     stage.appendChild(tip);
 
-    const fallback=(why)=>{
-      // 网络类失败一律回退到直连 src:宁可慢,也不能什么都播不了
-      if(v.getAttribute('src') && v.getAttribute('src').slice(0,5)==='blob:') return;
+    let settled=false;
+    const fallback=()=>{
+      if(settled) return;
+      settled=true;
+      if(ctrl) clearTimeout(timer);
       tip.remove();
       v.src=it.src; bindVideo(v, it);
     };
-    if(!window.fetch || !window.Blob){ v.src=it.src; bindVideo(v, it); return; }
+    const ctrl = (window.AbortController ? new AbortController() : null);
+    // 先给 video 一个空 blob,让元素进入"有源"状态,海报和控件立刻正常显示
+    let timer=null;
+    if(!window.fetch || !window.Blob){ fallback(); return; }
 
-    let aborted=false;
     try{
-      const ctrl=AbortController ? new AbortController() : null;
-      v.addEventListener('error', ()=>aborted=true, {once:true});
-
+      timer=setTimeout(fallback, HEAD_TIMEOUT);
       fetch(it.src, {headers:{'Range':'bytes=0-'+(HEAD_BYTES-1)}, signal:ctrl?ctrl.signal:undefined})
         .then(r=>{
           if(!r.ok && r.status!==206) throw new Error('HTTP '+r.status);
           return r.arrayBuffer();
         })
         .then(buf=>{
-          if(aborted) return;
+          if(settled) return;
+          settled=true; clearTimeout(timer);
           // 服务端忽略 Range 直接回了整个文件也无所谓 —— 反而更快
           tip.remove();
           v.src=URL.createObjectURL(new Blob([buf], {type:'video/mp4'}));
           bindVideo(v, it);
         })
-        .catch(()=>{ if(!aborted) fallback(); });
+        .catch(()=>fallback());
     }catch(e){ fallback(); }
   }
   function open(items,i){
