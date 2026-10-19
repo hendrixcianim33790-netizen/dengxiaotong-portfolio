@@ -858,8 +858,11 @@ footer{position:relative;z-index:10;text-align:center;padding:70px 0 56px}
         cur.setAttribute('playsinline',''); cur.setAttribute('webkit-playsinline','');
         cur.muted=true;   // 素材本来就无音轨,先静音保证自动播放不被浏览器拦
         cur.autoplay=true;
-        cur.src=it.src;
-        bindVideo(cur, it);
+        /* 关键:src 走 blob,先把前 1.6MB 抓下来再喂给 <video>。
+           慢网下整段下完才起播等于"打不开";先喂头部(含 moov + 前几秒画面),
+           播放期间浏览器在后台续下其余部分 —— 首帧出现的等待从 30 秒降到 2 秒。
+           fetch 失败则回退到直接 src,不至于什么都播不了。 */
+        loadFirst(cur, it);
       } else {
         cur.src=it.src; cur.alt=it.name||'';
       }
@@ -904,6 +907,45 @@ footer{position:relative;z-index:10;text-align:center;padding:70px 0 56px}
     }, 8000);
     ['canplay','playing','error'].forEach(ev=>
       v.addEventListener(ev, ()=>clearTimeout(guard), {once:true}));
+  }
+
+  /* 分段预加载:只抓文件头部就交给 <video>,让它先播起来。
+     —— mp4 的 moov(索引表)已经在文件头,拿到它浏览器就知道时长和关键帧位置,
+        不需要等整个文件到位。前 1.6MB 大约覆盖 8~10 秒画面,足够撑过缓冲。 */
+  const HEAD_BYTES = 800 * 1024;
+  function loadFirst(v, it){
+    const tip=document.createElement('div');
+    tip.className='pb-tip';
+    tip.innerHTML='<span class="pb-spin"></span><span class="pb-tip-tx">加载中</span>';
+    stage.appendChild(tip);
+
+    const fallback=(why)=>{
+      // 网络类失败一律回退到直连 src:宁可慢,也不能什么都播不了
+      if(v.getAttribute('src') && v.getAttribute('src').slice(0,5)==='blob:') return;
+      tip.remove();
+      v.src=it.src; bindVideo(v, it);
+    };
+    if(!window.fetch || !window.Blob){ v.src=it.src; bindVideo(v, it); return; }
+
+    let aborted=false;
+    try{
+      const ctrl=AbortController ? new AbortController() : null;
+      v.addEventListener('error', ()=>aborted=true, {once:true});
+
+      fetch(it.src, {headers:{'Range':'bytes=0-'+(HEAD_BYTES-1)}, signal:ctrl?ctrl.signal:undefined})
+        .then(r=>{
+          if(!r.ok && r.status!==206) throw new Error('HTTP '+r.status);
+          return r.arrayBuffer();
+        })
+        .then(buf=>{
+          if(aborted) return;
+          // 服务端忽略 Range 直接回了整个文件也无所谓 —— 反而更快
+          tip.remove();
+          v.src=URL.createObjectURL(new Blob([buf], {type:'video/mp4'}));
+          bindVideo(v, it);
+        })
+        .catch(()=>{ if(!aborted) fallback(); });
+    }catch(e){ fallback(); }
   }
   function open(items,i){
     list=items; lastFocus=document.activeElement;
